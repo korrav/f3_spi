@@ -1,0 +1,10 @@
+#
+#	Конфигурация акустического модуля
+#
+config ACOUSTIC_MODULE
+	tristate "drivers of the acoustic module"
+	default m
+	help
+	  This parameter is necessary for setting for generation 
+	  of drivers of the acoustic module.
+	
