@@ -1,0 +1,103 @@
+/*
+ * Copyright (C) 2013 CircuitCo
+ *
+ * Virtual cape for SPI1 (ALT #1) on connector pins
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ */
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "ti,beaglebone", "ti,beaglebone-black";
+
+	/* identification */
+	part-number = "BB-SPI-SLAVES";
+	version = "00A0";
+
+	/* state the resources this cape uses */
+	exclusive-use =
+		/* the pin header uses */
+		"P9.17",	/* spi0_cs0 */
+		"P9.18",	/* spi0_d1 */
+		"P9.21",	/* spi0_d0 */
+		"P9.22",	/* spi0_sclk */
+		"P9.42",	/* spi1_sclk */
+		"P9.29",	/* spi1_d0 */
+		"P9.30",	/* spi1_d1 */
+		"P9.20",	/* spi1_cs0 */
+		/* the hardware ip uses */
+		"spi0", 
+		"spi1";
+
+	fragment@0 {
+		target = <&am33xx_pinmux>;
+		__overlay__ {
+			/* default state has all gpios released and mode set to uart1 */
+			bb_spi0_pins: pinmux_bb_spi0_pins {
+				pinctrl-single,pins = <
+					0x150 0x30	/* spi0_sclk.spi0_sclk, INPUT_PULLUP | MODE0 */
+					0x154 0x30	/* spi0_d0.spi0_d0, INPUT_PULLUP | MODE0 */
+					0x158 0x10	/* spi0_d1.spi0_d1, OUTPUT_PULLUP | MODE0 */
+					0x15c 0x10	/* spi0_cs0.spi0_cs0, OUTPUT_PULLUP | MODE0 */
+				>;
+			};
+			bb_spi1_pins: pinmux_bb_spi1_pins {
+				pinctrl-single,pins = <
+					0x164 0x34	/* eCAP0_in_PWM0_out.spi1_sclk, INPUT_PULLUP | MODE4 */
+							/* NOTE: P9.42 is connected to two pads */
+					// 0x1A0 0x27	/* set the other pad to gpio input */
+					0x194 0x33	/* mcasp0_fsx.spi1_d0, INPUT_PULLUP | MODE3 */
+					0x198 0x13	/* mcasp0_axr0.spi1_d1, OUTPUT_PULLUP | MODE3 */
+					0x178 0x14	/* uart1_ctsn.spi1_cs0, OUTPUT_PULLUP | MODE4 */
+				>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&ocp>;	
+		__overlay__ {
+		
+			spi0_slave: spi_slave@48030000 {
+				compatible = "ti,omap4-mcspi_s0";
+				pinctrl-names = "default";
+				pinctrl-0 = <&bb_spi0_pins>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0x48030000 0x400>;
+				interrupt = <65>;
+				ti,spi-num-cs = <2>;
+				ti,hwmods = "spi0";
+				ti,cs = <0>;
+				dmas = <&edma 16
+					&edma 17
+					&edma 18
+					&edma 19>;
+				dma-names = "tx0", "rx0", "tx1", "rx1";
+				status = "okay";
+			};
+
+			spi1_slave: spi_slave@481a0000 {
+				compatible = "ti,omap4-mcspi_s1";
+				pinctrl-names = "default";
+				pinctrl-0 = <&bb_spi1_pins>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0x481a0000 0x400>;
+				interrupt = <125>;
+				ti,spi-num-cs = <2>;
+				ti,hwmods = "spi1";
+				ti,cs = <0>;
+				dmas = <&edma 42
+					&edma 43
+					&edma 44
+					&edma 45>;
+				dma-names = "tx0", "rx0", "tx1", "rx1";
+				status = "okay";
+			};				
+		};
+	};
+};
