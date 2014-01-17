@@ -35,6 +35,7 @@
 	fragment@0 {
 		target = <&am33xx_pinmux>;
 		__overlay__ {
+			
 			/* default state has all gpios released and mode set to uart1 */
 			bb_spi0_pins: pinmux_bb_spi0_pins {
 				pinctrl-single,pins = <
@@ -60,6 +61,9 @@
 	fragment@1 {
 		target = <&ocp>;	
 		__overlay__ {
+		
+			#address-cells = <1>;
+			#size-cells = <1>;
 		
 			spi0_slave: spi_slave@48030000 {
 				compatible = "ti,omap4-mcspi_s0";
