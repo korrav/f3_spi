@@ -31,7 +31,7 @@ enum adc_mode {
 struct dataUnit_ADC
 {
 	union error_adc error;		//ошибки в драйвере АЦП
-	enum pcm4204_mode mode;     //режим работы АЦП
+	enum adc_mode mode;     //режим работы АЦП
 	unsigned int amountCount;	//количество отсчётов в блоке данных (1 отс = 4 x 4 байт)
 	unsigned int count;			//порядковый номер первого отсчёта в блоке данных
 	short* pUnit;					//указатель на блок данных

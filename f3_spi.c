@@ -19,6 +19,7 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/poll.h>
 #include <linux/pm_runtime.h>
 #include <linux/of.h>
@@ -214,7 +215,7 @@ static int f3_spi_release(struct inode *inode, struct file *filp) {
 	return (0);
 }
 
-unsigned int f3_spi_poll(struct file *filp, struct poll_table *wait) {
+unsigned int f3_spi_poll(struct file *filp, poll_table *wait) {
 //	printk(KERN_INFO "Function is called poll\n");
 	unsigned int mask = 0;
 	mutex_lock(&adc_status.mutex_lock);
@@ -233,13 +234,11 @@ unsigned int f3_spi_poll(struct file *filp, struct poll_table *wait) {
 	return (mask);
 }
 
-int f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 	struct dataUnit_ADC temp_Unit;
 	int buf_cur_size; //размер текущего буфера в единицах SAMPL_SIZE
 	dma_addr_t cur_position; //физический адрес текущей позиции заполняемого DMA буфера
 	int num_trans_sampl = 0; // количество отсчётов, которое будет передано на данном запросе
-	int i = 0;
-	int cur_loc = 0;
 	switch (cmd) {
 	case IOCTL_ADC_START: //СТАРТ АЦП
 		start_adc();
@@ -416,24 +415,22 @@ static void callback_dma(unsigned lch, u16 ch_status, void *data) {
 //функция инициализации spi контроллеров и  структур модуля
 static int omap2_mcspi_probe(struct platform_device *pdev) {
 	struct edmacc_param param_set_buf[2]; //PARAM для буферов spi0
-	struct edmacc_param param_set_buf_spi1[2]; //PARAM для буферов spi1
 	u32 regval;
 	int result;
 	struct mcspi_controller* pcontrol;
 	struct resource *r;
 	const struct of_device_id *match;
 	struct pinctrl *pinctrl;
-	dma_cap_mask_t mask;
 	unsigned sig;
 	int acnt = 2, bcnt = 2, ccnt = 60000, dst_bindex = 2, dst_cindex = 8; //параметры каналов spi
 	int status = 0;
-	int dev;
+	struct device *dev;
 
 	match = of_match_device(mcspi_of_match, &pdev->dev);
 
 	//возвращение адреса структуры mcspi_controller, принадлежащей данному устройству platform_device
 	if (match) {
-		pcontrol = match->data;
+		pcontrol = (struct mcspi_controller*)match->data;
 	} else {
 		dev_err(&pdev->dev, "no match is found with the match table\n");
 		return -EPERM;
@@ -442,7 +439,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	//инициализация структуры mcspi_controller, принадлежащей данному устройству platform_device
 	pcontrol->pdev = pdev;
 	pcontrol->pnode = pdev->dev.of_node;
-	pcontrol->id = (&pcontrol == &control[0] ? 0 : 1);
+	pcontrol->id = (pcontrol == &control[0] ? 0 : 1);
 	of_property_read_u32(pcontrol->pnode, "ti,cs", &pcontrol->cs);
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (r == NULL) {
@@ -458,10 +455,10 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	}
 	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
 	if (IS_ERR(pinctrl)) {
-		ddev_dbg(&pdev->dev, "pins are not configured from the driver\n");
+		dev_err(&pdev->dev, "pins are not configured from the driver\n");
 		return -EPERM;
 	}
-	pcontrol->dma.dma_rx_ch_name = "rx0";
+	strcpy(pcontrol->dma.dma_rx_ch_name, "rx0");
 	r = platform_get_resource_byname(pdev,
 	IORESOURCE_DMA, pcontrol->dma.dma_rx_ch_name);
 	if (r == NULL) {
@@ -470,7 +467,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	}
 	pcontrol->dma.dma_rx_sync_dev = r->start;
 	//включение модуля
-	if (pm_runtime_get_sync(pdev) < 0) {
+	if (pm_runtime_get_sync(&pdev->dev) < 0) {
 		dev_err(&pdev->dev, "impossible power on the module\n");
 		return -ENODEV;
 	}
@@ -647,7 +644,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		adc_status.error.error = 0;
 		adc_status.users = 0;
 		adc_status.gain = 1;
-		sema_init(&adc_status.mutex_lock, 1);
+		mutex_init(&adc_status.mutex_lock);
 		//получение идентификатора для устройства
 		result = alloc_chrdev_region(&dev_f3_spi, 0, 1, device_name);
 		if (result) {
