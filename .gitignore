@@ -1,3 +1,8 @@
 ~*
 *~
 *.dtbo
+*.cmd
+*mod.c
+*.o
+*.ko
+*.order

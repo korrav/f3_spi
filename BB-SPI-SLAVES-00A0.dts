@@ -39,20 +39,20 @@
 			/* default state has all gpios released and mode set to uart1 */
 			bb_spi0_pins: pinmux_bb_spi0_pins {
 				pinctrl-single,pins = <
-					0x150 0x30	/* spi0_sclk.spi0_sclk, INPUT_PULLUP | MODE0 */
-					0x154 0x30	/* spi0_d0.spi0_d0, INPUT_PULLUP | MODE0 */
-					0x158 0x10	/* spi0_d1.spi0_d1, OUTPUT_PULLUP | MODE0 */
-					0x15c 0x10	/* spi0_cs0.spi0_cs0, OUTPUT_PULLUP | MODE0 */
+					0x150 0x28	/* spi0_sclk.spi0_sclk, INPUT | MODE0 */
+					0x154 0x8	/* spi0_d0.spi0_d0, OUTPUT | MODE0 */
+					0x158 0x28	/* spi0_d1.spi0_d1, INPUT | MODE0 */
+					0x15c 0x28	/* spi0_cs0.spi0_cs0, INPUT | MODE0 */
 				>;
 			};
 			bb_spi1_pins: pinmux_bb_spi1_pins {
 				pinctrl-single,pins = <
-					0x164 0x34	/* eCAP0_in_PWM0_out.spi1_sclk, INPUT_PULLUP | MODE4 */
+					0x190 0x2B	/* MCASP0_ACLKX.spi1_sclk, INPUT_PULLUP | MODE3 */
 							/* NOTE: P9.42 is connected to two pads */
 					// 0x1A0 0x27	/* set the other pad to gpio input */
-					0x194 0x33	/* mcasp0_fsx.spi1_d0, INPUT_PULLUP | MODE3 */
-					0x198 0x13	/* mcasp0_axr0.spi1_d1, OUTPUT_PULLUP | MODE3 */
-					0x178 0x14	/* uart1_ctsn.spi1_cs0, OUTPUT_PULLUP | MODE4 */
+					0x194 0xB	/* mcasp0_fsx.spi1_d0, OUTPUT | MODE3 */
+					0x198 0x2B	/* mcasp0_axr0.spi1_d1, INPUT | MODE3 */
+					0x19C 0x2B	/* MCASP0_AHCLKR.spi1_cs0, INPUT | MODE3 */
 				>;
 			};
 		};

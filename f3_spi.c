@@ -30,13 +30,41 @@
 #include <linux/cdev.h>
 #include "f3_spi.h"
 
-MODULE_LICENSE("GPL")
-;
-MODULE_AUTHOR("Andrej Korobchenko <korrav@yandex.ru>")
-;
-MODULE_VERSION("0:1.0")
-;
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Andrej Korobchenko <korrav@yandex.ru>");
+MODULE_VERSION("0:1.0");
 
+//подсистема прерывания
+#define INTCP						0x48200000 //базовый адрес области регистров подсистемы питания
+#define INTC_REVISION 				0
+#define INTC_SYSCONFIG 				0x10
+#define INTC_SYSSTATUS 				0x14
+#define INTC_SIR_IRQ  				0x40
+#define INTC_CONTROL   				0x48
+#define INTC_PROTECTION    			0x4C
+#define INTC_IDLE 					0x50
+#define INTC_IRQ_PRIORITY  			0x60
+#define INTC_THRESHOLD   			0x68
+#define INTC_ITR2    				0xC0
+#define INTC_MIR2     				0xC4
+#define INTC_MIR_CLEAR2      		0xC8
+#define INTC_MIR_SET2 				0xCC
+#define INTC_ISR_SET2  				0xD0
+#define INTC_ISR_CLEAR2   			0xD4
+#define INTC_PENDING_IRQ2    		0xD8
+#define INTC_ITR3    				0xE0
+#define INTC_MIR3     				0xE4
+#define INTC_MIR_CLEAR3      		0xE8
+#define INTC_MIR_SET3 				0xEC
+#define INTC_ISR_SET3  				0xF0
+#define INTC_ISR_CLEAR3   			0xF4
+#define INTC_PENDING_IRQ3    		0xF8
+
+//подсистема питания
+#define CM_PER						0x44E00000 //базовый адрес области регистров подсистемы питания
+#define CM_PER_SPI0_CLKCTRL 		0x4C
+#define CM_PER_SPI1_CLKCTRL         0x50
+#define CM_PER_L4LS_CLKSTCTRL 		0
 //регистры SPI
 #define OMAP2_MCSPI_REVISION		0x00
 #define OMAP2_SYSCONFIG				0x110
@@ -51,6 +79,7 @@ MODULE_VERSION("0:1.0")
 #define OMAP2_CH0CTRL				0x134
 #define OMAP2_TX0					0x138
 #define OMAP2_RX0					0x13c
+#define OMAP2_MCSPI_XFERLEVEL		0x17c
 
 //bitfield OMAP2_MCSPI_MODULCTRL
 #define OMAP2_MCSPI_MODULCTRL_SINGLE	BIT(0)
@@ -76,9 +105,21 @@ MODULE_VERSION("0:1.0")
 #define OMAP2_MCSPI_CHCONF_FORCE		BIT(20)
 #define OMAP2_MCSPI_CHCONF_SPIENSLV0	BIT(21)
 #define OMAP2_MCSPI_CHCONF_SPIENSLV1	BIT(22)
+#define OMAP2_MCSPI_CHCONF_FFER			BIT(28)
+
+#define OMAP2_MCSPI_IRQSTATUS_RX0_FULL  BIT(2)
+
+#define OMAP2_SYSCONFIG_SOFTRESET 		BIT(1)
 
 //bitfield OMAP2_CH0CTRL
 #define OMAP2_MCSPI_CHCTRL_EN			BIT(0)
+
+//bitfield OMAP2_MCSPI_XFERLEVEL
+#define OMAP2_MCSPI_XFERLEVEL_AFL_MASK  (0x3F << 8)
+
+#define OMAP2_MCSPI_WAKEUPENABLE_WKEN	BIT(0)
+
+#define OMAP2_MCSPI_RX0_FULL__ENABLE	BIT(2)
 
 #define SPI_IRQ 12	//номер прерывания для SPI EDMA
 
@@ -107,6 +148,9 @@ struct mcspi_dma {
 	int dma_rx_sync_dev;
 	char dma_rx_ch_name[14];
 };
+
+void __iomem *map_cer; //отображение области регистров подсистемы питания
+void __iomem *map_inq; //отображение области регистров подсистемы прерывания
 
 struct mcspi_controller { //хранятся аппаратные данные контроллеров spi
 	int status; //	характеризует состояние контроллера
@@ -154,6 +198,9 @@ struct gain_MAD { //структура, содержащая номер отсч
 	int sampl; //номер отсчёта
 };
 
+//функция, сообщающая значения всех регистров модуля spi
+void print_registers_spi(void);
+
 //функция для оперирования регистрами контроллеров spi
 static inline void mcspi_write_reg(struct mcspi_controller *pcontrol, int idx,
 		u32 val) {
@@ -170,6 +217,8 @@ static const struct of_device_id mcspi_of_match[] = { { .compatible =
 		"ti,omap4-mcspi_s0", .data = &control[0], }, { .compatible =
 		"ti,omap4-mcspi_s1", .data = &control[1], }, { }, };
 MODULE_DEVICE_TABLE(of, mcspi_of_match);
+
+irqreturn_t spi_handler(int req, void* dev);
 
 static void start_adc(void) //запуск АЦП
 {
@@ -242,7 +291,10 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 	switch (cmd) {
 	case IOCTL_ADC_START: //СТАРТ АЦП
 		start_adc();
-		//printk(KERN_INFO "Was launched by ADC\n");
+		printk(KERN_INFO "Was launched by ADC\n");
+		break;
+	case IOCTL_READ_REGISTERS:
+		print_registers_spi();
 		break;
 	case IOCTL_ADC_SYNC: //ПОЛУЧЕНИЕ СИНХРОСИГНАЛА
 		//вычисление номера текущего отсчёта
@@ -257,7 +309,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		break;
 	case IOCTL_ADC_STOP:
 		stop_adc();
-		//printk(KERN_INFO "Was stopped by the ADC\n");
+		printk(KERN_INFO "Was stopped by the ADC\n");
 		break;
 	case IOCTL_ADC_GET_MESSAGE: //ПОЛУЧЕНИЕ БЛОКА ДАННЫХ АЦП
 		//получение буфера пользовательского пространства
@@ -268,6 +320,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		temp_Unit.mode = adc_status.mode;
 		mutex_lock(&adc_status.mutex_lock);
 		disable_irq(SPI_IRQ);
+		printk(KERN_INFO "request IOCTL_ADC_GET_MESSAGE\n");
 //		printk(
 //				KERN_INFO "Number of the first frame in the buffer is equal to %d\n",
 //				temp_Unit.count);
@@ -286,7 +339,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		//printk(KERN_INFO "Nor is there a missed sync\n");
 		//возможно ли сейчас передать очередной блок данных АЦП?
 		if (temp_Unit.mode == STOP_MODE) { //проверка на наличие фатальных ошибок
-			//printk(KERN_INFO "ADC now stopped\n");
+			printk(KERN_INFO "ADC now stopped\n");
 			temp_Unit.error.is_error_cc_edma =
 					adc_status.error.is_error_cc_edma;
 			temp_Unit.error.is_error_tc_edma =
@@ -298,8 +351,8 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		} else if ((buf[adc_status.num_buf_read].compl_fill == false)
 				|| (buf[adc_status.num_buf_read].loc == COMPL_READ_BUFFER)) {
 			//ожидание, когда произойдёт ротация буферов АЦП (ping-pong)
-			//printk(KERN_INFO "At the moment it is impossible to transmit data\n");
-			INIT_COMPLETION(done_PingPong);
+printk(KERN_INFO "At the moment it is impossible to transmit data\n");
+																																	INIT_COMPLETION(done_PingPong);
 			enable_irq(SPI_IRQ);
 			wait_for_completion(&done_PingPong);
 			//printk(KERN_INFO "It is now possible to transfer data\n");
@@ -430,7 +483,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 
 	//возвращение адреса структуры mcspi_controller, принадлежащей данному устройству platform_device
 	if (match) {
-		pcontrol = (struct mcspi_controller*)match->data;
+		pcontrol = (struct mcspi_controller*) match->data;
 	} else {
 		dev_err(&pdev->dev, "no match is found with the match table\n");
 		return -EPERM;
@@ -467,12 +520,18 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	}
 	pcontrol->dma.dma_rx_sync_dev = r->start;
 	//включение модуля
+	pm_runtime_enable(&pdev->dev);
 	if (pm_runtime_get_sync(&pdev->dev) < 0) {
 		dev_err(&pdev->dev, "impossible power on the module\n");
 		return -ENODEV;
 	}
+	/*mcspi_write_reg(pcontrol, OMAP2_MCSPI_WAKEUPENABLE,
+	 OMAP2_MCSPI_WAKEUPENABLE_WKEN);*/
 	//инициализация регистров модуля
-	mcspi_write_reg(pcontrol, OMAP2_MCSPI_MODULCTRL, OMAP2_MCSPI_MODULCTRL_MS);
+	mcspi_write_reg(pcontrol, OMAP2_SYSCONFIG, 0x308);
+
+	mcspi_write_reg(pcontrol, OMAP2_MCSPI_MODULCTRL,
+	OMAP2_MCSPI_MODULCTRL_MS | OMAP2_MCSPI_MODULCTRL_PIN34);
 	regval = 0;
 	regval &= ~OMAP2_MCSPI_CHCONF_DPE0;
 	regval |= OMAP2_MCSPI_CHCONF_DPE1;
@@ -489,7 +548,17 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	regval &= ~OMAP2_MCSPI_CHCONF_TURBO;
 	regval &= ~ OMAP2_MCSPI_CHCONF_SPIENSLV0;
 	regval &= ~ OMAP2_MCSPI_CHCONF_SPIENSLV1;
+	regval |= OMAP2_MCSPI_CHCONF_FFER;
 	mcspi_write_reg(pcontrol, OMAP2__CH0CONF, regval);
+
+	regval = 0;
+	regval &= ~OMAP2_MCSPI_XFERLEVEL_AFL_MASK;
+	regval |= 3 << 8;
+	mcspi_write_reg(pcontrol, OMAP2_MCSPI_XFERLEVEL, regval);
+
+	regval = 0;
+	regval |= OMAP2_MCSPI_RX0_FULL__ENABLE;
+	mcspi_write_reg(pcontrol, OMAP2_MCSPI_IRQENABLE, regval);
 
 	sig = pcontrol->dma.dma_rx_sync_dev;
 	pcontrol->status = INITIALIZED;
@@ -544,6 +613,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		//ИНИЦИАЛИЗАЦИЯ СТРУКТУР PARAMSET для spi0
 		edma_set_src(control[0].dma.dma_rx_sync_dev,
 				(unsigned long) (control[0].phys + OMAP2_RX0), FIFO, W16BIT); //установка адреса источника и его адресного режима
+		printk(KERN_ALERT "SPI0: address source EDMA = %ld\n", control[0].phys + OMAP2_RX0);
 		edma_set_dest(control[0].dma.dma_rx_sync_dev,
 				(unsigned long) (buf[0].bus_loc), INCR, W16BIT); //установка адреса приёмника и его адресного режима
 		edma_set_src_index(control[0].dma.dma_rx_sync_dev, 0, 0); //установка параметров индексации адреса источника
@@ -594,6 +664,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		edma_write_slot(control[1].dma.dma_rx_sync_dev, &param_set_buf[0]); //установка PARAMSET для канала
 		edma_set_src(control[1].dma.dma_rx_sync_dev,
 				(unsigned long) (control[1].phys + OMAP2_RX0), FIFO, W16BIT); //установка адреса источника и его адресного режима
+		printk(KERN_ALERT "SPI1: address source EDMA = %ld\n", control[1].phys + OMAP2_RX0);
 		edma_set_dest(control[1].dma.dma_rx_sync_dev,
 				(unsigned long) (buf[0].bus_loc + 4), INCR, W16BIT); //установка адреса приёмника и его адресного режима
 		edma_read_slot(control[1].dma.dma_rx_sync_dev, &param_set_buf[0]);
@@ -636,6 +707,32 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 			status = result;
 			goto stop_edma_spi0;
 		}
+		//ИНИЦИАЛИЗАЦИЯ ПРЕРЫВАНИЙ
+		/*map_inq = ioremap(INTCP, 4096);
+		if(!map_inq)
+			printk(KERN_INFO"false ioremap(INTCP, 4096)");
+		//разрешение прерывания
+		__raw_writel(0x2, map_inq + INTC_MIR_CLEAR2);
+		__raw_writel(0x20000000, map_inq + INTC_MIR_CLEAR3);
+		if (request_irq(65, spi_handler, IRQF_DISABLED | IRQF_NO_SUSPEND, "spi0", &control[0])) {
+			printk(KERN_ALERT "fail reuest interrupt for spi0\n");
+			status = -EIO;
+			goto stop_edma_spi1;
+		}
+		if (request_irq(125, spi_handler, IRQF_DISABLED | IRQF_NO_SUSPEND, "spi1", &control[1])) {
+			printk(KERN_ALERT "fail reuest interrupt for spi1\n");
+			status = -EIO;
+			goto stop_edma_spi1;
+		}*/
+		//enable_irq(65);
+		//enable_irq(125);
+
+		mcspi_write_reg(&control[0], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
+		mcspi_write_reg(&control[1], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
+
+		map_cer = ioremap(CM_PER, 100);
+		if(!map_cer)
+		printk(KERN_INFO"false ioremap(CM_PER, 100)");
 		//ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННОЙ СОСТОЯНИЯ ДРАЙВЕРА
 		adc_status.mode = STOP_MODE;
 		adc_status.num_buf_write = 0;
@@ -719,3 +816,130 @@ static struct platform_driver omap2_mcspi_driver = { .driver = { .name =
 		.probe = omap2_mcspi_probe, .remove = omap2_mcspi_remove, };
 
 module_platform_driver(omap2_mcspi_driver);
+
+irqreturn_t spi_handler(int req, void* dev) {
+	u32 val = 0, regval = 0;
+	struct mcspi_controller* pcontroller = dev;
+	printk(KERN_INFO "Message from interrupt%d\n", req);
+	if ((regval = mcspi_read_reg(pcontroller,
+	OMAP2_MCSPI_IRQSTATUS)) & OMAP2_MCSPI_IRQSTATUS_RX0_FULL) {
+		val = mcspi_read_reg(pcontroller, OMAP2_RX0);
+		printk(KERN_INFO "Message %d is received from the SPI %d\n", val,pcontroller->id);
+		val |= OMAP2_MCSPI_IRQSTATUS_RX0_FULL;
+		mcspi_write_reg(pcontroller, OMAP2_MCSPI_IRQSTATUS, val);
+	}
+	return IRQ_HANDLED;
+}
+void print_registers_spi(void) {
+	//ВЫВОД ЗНАЧЕНИЙ ВСЕХ РЕГИСТРОВ
+printk(KERN_EMERG "Register CM_PER_L4LS_CLKSTCTRL val = %X\n", __raw_readl(map_cer + CM_PER_L4LS_CLKSTCTRL));
+printk(KERN_EMERG "Register CM_PER_SPI0_CLKCTRL val = %X\n", __raw_readl(map_cer + CM_PER_SPI0_CLKCTRL));
+printk(KERN_EMERG "Register CM_PER_SPI1_CLKCTRL val = %X\n", __raw_readl(map_cer + CM_PER_SPI1_CLKCTRL));
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_REVISION: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_REVISION,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_REVISION));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_REVISION: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_REVISION,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_REVISION));
+
+printk(KERN_EMERG "SPI0: register OMAP2_SYSCONFIG: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_SYSCONFIG,
+		mcspi_read_reg(&control[0], OMAP2_SYSCONFIG));
+printk(KERN_EMERG "SPI1: register OMAP2_SYSCONFIG: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_SYSCONFIG,
+		mcspi_read_reg(&control[1], OMAP2_SYSCONFIG));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_SYSSTATUS: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_SYSSTATUS,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_SYSSTATUS));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_SYSSTATUS: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_SYSSTATUS,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_SYSSTATUS));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_IRQSTATUS: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_IRQSTATUS,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_IRQSTATUS));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_IRQSTATUS: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_IRQSTATUS,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_IRQSTATUS));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_IRQENABLE: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_IRQENABLE,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_IRQENABLE));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_IRQENABLE: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_IRQENABLE,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_IRQENABLE));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_WAKEUPENABLE: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_WAKEUPENABLE,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_WAKEUPENABLE));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_WAKEUPENABLE: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_WAKEUPENABLE,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_WAKEUPENABLE));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_SYST: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_SYST,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_SYST));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_SYST: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_SYST,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_SYST));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_MODULCTRL: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_MODULCTRL,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_MODULCTRL));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_MODULCTRL: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_MODULCTRL,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_MODULCTRL));
+
+printk(KERN_EMERG "SPI0: register OMAP2__CH0CONF: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2__CH0CONF,
+		mcspi_read_reg(&control[0], OMAP2__CH0CONF));
+printk(KERN_EMERG "SPI1: register OMAP2__CH0CONF: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2__CH0CONF,
+		mcspi_read_reg(&control[1], OMAP2__CH0CONF));
+
+printk(KERN_INFO "SPI0: register OMAP2_CH0STAT: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_CH0STAT,
+		mcspi_read_reg(&control[0], OMAP2_CH0STAT));
+printk(KERN_EMERG "SPI1: register OMAP2_CH0STAT: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_CH0STAT,
+		mcspi_read_reg(&control[1], OMAP2_CH0STAT));
+
+printk(KERN_EMERG "SPI0: register OMAP2_CH0CTRL: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_CH0CTRL,
+		mcspi_read_reg(&control[0], OMAP2_CH0CTRL));
+printk(KERN_EMERG "SPI1: register OMAP2_CH0CTRL: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_CH0CTRL,
+		mcspi_read_reg(&control[1], OMAP2_CH0CTRL));
+
+printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_XFERLEVEL: address = %ld,  value = %X\n",
+		control[0].phys + OMAP2_MCSPI_XFERLEVEL,
+		mcspi_read_reg(&control[0], OMAP2_MCSPI_XFERLEVEL));
+printk(KERN_EMERG "SPI1: register OMAP2_MCSPI_XFERLEVEL: address = %ld,  value = %X\n",
+		control[1].phys + OMAP2_MCSPI_XFERLEVEL,
+		mcspi_read_reg(&control[1], OMAP2_MCSPI_XFERLEVEL));
+printk(KERN_EMERG "Register INTC_REVISION val = %X\n", __raw_readl(map_inq + INTC_REVISION));
+printk(KERN_EMERG "Register INTC_SYSSTATUS val = %X\n", __raw_readl(map_inq + INTC_SYSSTATUS));
+printk(KERN_EMERG "Register INTC_SIR_IRQ val = %X\n", __raw_readl(map_inq + INTC_SIR_IRQ));
+printk(KERN_EMERG "Register INTC_CONTROL val = %X\n", __raw_readl(map_inq + INTC_CONTROL));
+printk(KERN_EMERG "Register INTC_PROTECTION val = %X\n", __raw_readl(map_inq + INTC_PROTECTION));
+printk(KERN_EMERG "Register INTC_IDLE val = %X\n", __raw_readl(map_inq + INTC_IDLE));
+printk(KERN_EMERG "Register INTC_IRQ_PRIORITY val = %X\n", __raw_readl(map_inq + INTC_IRQ_PRIORITY));
+printk(KERN_EMERG "Register INTC_THRESHOLD val = %X\n", __raw_readl(map_inq + INTC_THRESHOLD));
+printk(KERN_EMERG "Register INTC_ITR2 val = %X\n", __raw_readl(map_inq + INTC_ITR2));
+printk(KERN_EMERG "Register INTC_MIR2 val = %X\n", __raw_readl(map_inq + INTC_MIR2));
+printk(KERN_EMERG "Register INTC_MIR_CLEAR2 val = %X\n", __raw_readl(map_inq + INTC_MIR_CLEAR2));
+printk(KERN_EMERG "Register INTC_MIR_SET2 val = %X\n", __raw_readl(map_inq + INTC_MIR_SET2));
+printk(KERN_EMERG "Register INTC_ISR_SET2 val = %X\n", __raw_readl(map_inq + INTC_ISR_SET2));
+printk(KERN_EMERG "Register INTC_ISR_CLEAR2 val = %X\n", __raw_readl(map_inq + INTC_ISR_CLEAR2));
+printk(KERN_EMERG "Register INTC_PENDING_IRQ2 val = %X\n", __raw_readl(map_inq + INTC_PENDING_IRQ2));
+printk(KERN_EMERG "Register INTC_ITR3 val = %X\n", __raw_readl(map_inq + INTC_ITR3));
+printk(KERN_EMERG "Register INTC_MIR3 val = %X\n", __raw_readl(map_inq + INTC_MIR3));
+printk(KERN_EMERG "Register INTC_MIR_CLEAR3 val = %X\n", __raw_readl(map_inq + INTC_MIR_CLEAR3));
+printk(KERN_EMERG "Register INTC_MIR_SET3 val = %X\n", __raw_readl(map_inq + INTC_MIR_SET3));
+printk(KERN_EMERG "Register INTC_ISR_SET3 val = %X\n", __raw_readl(map_inq + INTC_ISR_SET3));
+printk(KERN_EMERG "Register INTC_ISR_CLEAR3 val = %X\n", __raw_readl(map_inq + INTC_ISR_CLEAR3));
+printk(KERN_EMERG "Register INTC_PENDING_IRQ3 val = %X\n", __raw_readl(map_inq + INTC_PENDING_IRQ3));
+printk(KERN_EMERG "Register INTC_SYSCONFIG val = %X\n", __raw_readl(map_inq + INTC_SYSCONFIG));
+return;
+}

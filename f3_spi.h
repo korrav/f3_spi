@@ -47,5 +47,7 @@ struct dataUnit_ADC
 #define IOCTL_ADC_STOP _IO(ID_IO_F3_SPI, 2)
 //приём данных от АЦП
 #define IOCTL_ADC_GET_MESSAGE _IOWR(ID_IO_F3_SPI, 0, struct dataUnit_ADC*)
+//получение информации о регистрах модулей SPI0 и SPI1 в пространстве ядра
+#define IOCTL_READ_REGISTERS _IO(ID_IO_F3_SPI, 5)
 
 #endif /* F3_SPI_DRIVER_H_ */
