@@ -206,7 +206,7 @@ MODULE_VERSION("0:1.0");
 
 #define COMPL_READ_BUFFER -1	//данный буффер полностью прочитан
 
-//условная переменная, указывающая на то, что произошёл очередной ping-pong
+//условная переменная, указывающая на то, что произошёл очередной ping-pong, а также если произошла остановка АЦП
 DECLARE_COMPLETION(done_PingPong);
 //условная переменная, указывающая на то, что произошёл очередной ping-pong
 DECLARE_WAIT_QUEUE_HEAD( qwait);
@@ -339,6 +339,7 @@ static void stop_adc(void) //остановка АЦП
 		adc_status.mode = STOP_MODE;
 		adc_status.error.is_fragmentation = 1;
 		adc_status.error.is_passed_sync = 1;
+		complete(&done_PingPong); //сигнализирует о том, что произошла остановка АЦП
 	}
 	return;
 }
@@ -448,6 +449,11 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 			INIT_COMPLETION(done_PingPong);
 			enable_irq(SPI_IRQ);
 			wait_for_completion(&done_PingPong);
+			if (adc_status.mode == STOP_MODE) { //во время ожидания пинг-понга произошла остановка АЦП
+				temp_Unit.amountCount = 0;
+				temp_Unit.mode = STOP_MODE;
+				return 0;
+			}
 			//printk(KERN_INFO "It is now possible to transfer data\n");
 			mutex_lock(&adc_status.mutex_lock);
 			disable_irq(SPI_IRQ);
@@ -667,7 +673,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		printk(KERN_INFO"false ioremap(TPCC, 4248)");
 		map_edma_tc = ioremap(EDMA3TC1, 984);
 		if(!map_edma_tc)
-			printk(KERN_INFO"false ioremap(EDMA3TC1, 984)");
+		printk(KERN_INFO"false ioremap(EDMA3TC1, 984)");
 		map_inq = ioremap(INTCP, 4096);
 		if(!map_inq)
 		printk(KERN_INFO"false ioremap(INTCP, 4096)");
@@ -715,8 +721,8 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 			status = result;
 			goto free_memory_buf1;
 		} else {
-		printk(KERN_ALERT "edma_alloc_channel for spi0 = %d\n", control[0].dma.dma_rx_sync_dev);
-		eslots.spi0_ch = control[0].dma.dma_rx_sync_dev;
+			printk(KERN_ALERT "edma_alloc_channel for spi0 = %d\n", control[0].dma.dma_rx_sync_dev);
+			eslots.spi0_ch = control[0].dma.dma_rx_sync_dev;
 		}
 		result = edma_alloc_channel(control[1].dma.dma_rx_sync_dev, NULL,
 		NULL, EVENTQ_DEFAULT); //размещение DMA канала для spi1
@@ -725,8 +731,8 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 			status = result;
 			goto free_channel_spi0;
 		} else {
-		printk(KERN_ALERT "edma_alloc_channel for spi1 = %d\n", control[1].dma.dma_rx_sync_dev);
-		eslots.spi1_ch = control[1].dma.dma_rx_sync_dev;
+			printk(KERN_ALERT "edma_alloc_channel for spi1 = %d\n", control[1].dma.dma_rx_sync_dev);
+			eslots.spi1_ch = control[1].dma.dma_rx_sync_dev;
 		}
 		//ИНИЦИАЛИЗАЦИЯ СТРУКТУР PARAMSET для spi0
 		edma_set_src(control[0].dma.dma_rx_sync_dev,
@@ -742,12 +748,13 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		//заполнение первого PARAMSET
 		edma_read_slot(control[0].dma.dma_rx_sync_dev, &param_set_buf[0]);
 		//__clear_bit(ITCCHEN, (unsigned long*) &param_set_buf[0].opt); //отключение функции интрацепочной передачи
-		param_set_buf[0].opt &= ~ITCCHEN;	//отключение функции интрацепочной передачи
-		param_set_buf[0].opt &= ~TCCHEN;	//отключение функции цепочной передачи
-		param_set_buf[0].opt &= ~ITCINTEN;	//запрещение промежуточного прерывания
-		param_set_buf[0].opt |=	TCINTEN;	//разрешение прерывания по окончанию передачи
-		param_set_buf[0].opt |= EDMA_TCC(EDMA_CHAN_SLOT(control[0].dma.dma_rx_sync_dev)); //идентифицирование кода завершения передачи
-		param_set_buf[0].opt &= ~TCCMODE;	//установка режима нормального завершения
+		param_set_buf[0].opt &= ~ITCCHEN;//отключение функции интрацепочной передачи
+		param_set_buf[0].opt &= ~TCCHEN;//отключение функции цепочной передачи
+		param_set_buf[0].opt &= ~ITCINTEN;//запрещение промежуточного прерывания
+		param_set_buf[0].opt |= TCINTEN;//разрешение прерывания по окончанию передачи
+		param_set_buf[0].opt |= EDMA_TCC(
+				EDMA_CHAN_SLOT(control[0].dma.dma_rx_sync_dev)); //идентифицирование кода завершения передачи
+		param_set_buf[0].opt &= ~TCCMODE;//установка режима нормального завершения
 		param_set_buf[0].opt &= ~STATIC;	//PARAMSET не статичный
 
 		edma_write_slot(control[0].dma.dma_rx_sync_dev, &param_set_buf[0]); //установка PARAMSET для канала
@@ -757,10 +764,9 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 			printk(KERN_ALERT "edma_alloc_slot 0 for spi0 failed for buf[0]\n");
 			status = result;
 			goto free_channel_spi1;
-		}
-		else {
-		 printk(KERN_ALERT "edma alloc slot 0 for spi0 = %d\n", result);
-		 eslots.spi0_s0 = result;
+		} else {
+			printk(KERN_ALERT "edma alloc slot 0 for spi0 = %d\n", result);
+			eslots.spi0_s0 = result;
 		}
 		buf[0].num_slot = result;
 		edma_write_slot(buf[0].num_slot, &param_set_buf[0]);
@@ -786,7 +792,7 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		edma_link(buf[0].num_slot, buf[1].num_slot);
 
 		//ИНИЦИАЛИЗАЦИЯ СТРУКТУР PARAMSET для spi1
-		param_set_buf[0].opt &= ~TCINTEN;	//запрещение прерывания по окончанию передачи
+		param_set_buf[0].opt &= ~TCINTEN;//запрещение прерывания по окончанию передачи
 
 		edma_write_slot(control[1].dma.dma_rx_sync_dev, &param_set_buf[0]); //установка PARAMSET для канала
 		edma_set_src(control[1].dma.dma_rx_sync_dev,
@@ -819,13 +825,13 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		}
 		buf[1].num_slot1 = result;
 		//заполнение неотображённого слота для buf[1] для spi1
-		param_set_buf[1].opt &= ~TCINTEN;	////запрещение прерывания по окончанию передачи
+		param_set_buf[1].opt &= ~TCINTEN;////запрещение прерывания по окончанию передачи
 
 		edma_write_slot(buf[1].num_slot1, &param_set_buf[1]);
 		edma_set_dest(buf[1].num_slot1, (unsigned long) (buf[1].bus_loc + 4),
 				INCR, W16BIT); //установка адреса приёмника и его адресного режима
 		edma_set_src(buf[1].num_slot1,
-						(unsigned long) (control[1].phys + OMAP2_RX0), INCR, W16BIT); //установка адреса источника и его адресного режима
+				(unsigned long) (control[1].phys + OMAP2_RX0), INCR, W16BIT); //установка адреса источника и его адресного режима
 		//связывание канала и слотов между собой - организация пинг-понга
 		edma_link(control[1].dma.dma_rx_sync_dev, buf[1].num_slot1);
 		edma_link(buf[1].num_slot1, buf[0].num_slot1);
@@ -1003,9 +1009,6 @@ void print_registers_spi(void) {
 	printk(KERN_EMERG "EDMA CC: Register SER val = %X\n", __raw_readl(map_edma_cc + SER));
 	printk(KERN_EMERG "EDMA CC: Register SERH val = %X\n", __raw_readl(map_edma_cc + SERH));
 
-
-
-
 #define DFOPT1				0x340
 #define DFCNT1				0x348
 #define DFDST1				0x34C
@@ -1052,11 +1055,6 @@ void print_registers_spi(void) {
 	printk(KERN_EMERG "EDMA TC: Register DFCNT3 val = %X\n", __raw_readl(map_edma_tc + DFCNT3));
 	printk(KERN_EMERG "EDMA TC: Register DFDST3 val = %X\n", __raw_readl(map_edma_tc + DFDST3));
 	printk(KERN_EMERG "EDMA TC: Register DFBIDX3 val = %X\n", __raw_readl(map_edma_tc + DFBIDX3));
-
-
-
-
-
 
 	printk(KERN_EMERG "SPI0: register OMAP2_MCSPI_REVISION: address = %ld,  value = %X\n",
 			control[0].phys + OMAP2_MCSPI_REVISION,
