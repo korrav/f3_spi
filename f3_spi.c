@@ -413,7 +413,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		temp_Unit.mode = adc_status.mode;
 		mutex_lock(&adc_status.mutex_lock);
 		disable_irq(SPI_IRQ);
-		printk(KERN_INFO "request IOCTL_ADC_GET_MESSAGE\n");
+		//printk(KERN_INFO "request IOCTL_ADC_GET_MESSAGE\n");
 //		printk(
 //				KERN_INFO "Number of the first frame in the buffer is equal to %d\n",
 //				temp_Unit.count);
@@ -432,7 +432,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		//printk(KERN_INFO "Nor is there a missed sync\n");
 		//возможно ли сейчас передать очередной блок данных АЦП?
 		if (temp_Unit.mode == STOP_MODE) { //проверка на наличие фатальных ошибок
-			printk(KERN_INFO "ADC now stopped\n");
+			//printk(KERN_INFO "ADC now stopped\n");
 			temp_Unit.error.is_error_cc_edma =
 					adc_status.error.is_error_cc_edma;
 			temp_Unit.error.is_error_tc_edma =
@@ -444,7 +444,7 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 		} else if ((buf[adc_status.num_buf_read].compl_fill == false)
 				|| (buf[adc_status.num_buf_read].loc == COMPL_READ_BUFFER)) {
 			//ожидание, когда произойдёт ротация буферов АЦП (ping-pong)
-			printk(KERN_INFO "At the moment it is impossible to transmit data\n");
+			//printk(KERN_INFO "At the moment it is impossible to transmit data\n");
 			mutex_unlock(&adc_status.mutex_lock);
 			INIT_COMPLETION(done_PingPong);
 			enable_irq(SPI_IRQ);
@@ -628,6 +628,9 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 	}
 	/*mcspi_write_reg(pcontrol, OMAP2_MCSPI_WAKEUPENABLE,
 	 OMAP2_MCSPI_WAKEUPENABLE_WKEN);*/
+	//сброс модуля
+	mcspi_write_reg(pcontrol, OMAP2_SYSCONFIG, OMAP2_SYSCONFIG_SOFTRESET);
+	while(!mcspi_read_reg(pcontrol, OMAP2_MCSPI_SYSSTATUS));
 	//инициализация регистров модуля
 	mcspi_write_reg(pcontrol, OMAP2_SYSCONFIG, 0x308);
 
@@ -866,8 +869,8 @@ static int omap2_mcspi_probe(struct platform_device *pdev) {
 		 }*/
 		//enable_irq(65);
 		//enable_irq(125);
-		mcspi_write_reg(&control[0], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
-		mcspi_write_reg(&control[1], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
+		//mcspi_write_reg(&control[0], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
+		//mcspi_write_reg(&control[1], OMAP2_CH0CTRL, OMAP2_MCSPI_CHCTRL_EN);
 
 		//ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННОЙ СОСТОЯНИЯ ДРАЙВЕРА
 		adc_status.mode = STOP_MODE;
