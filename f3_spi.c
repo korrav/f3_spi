@@ -440,6 +440,8 @@ long f3_spi_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 			temp_Unit.amountCount = 0;
 			mutex_unlock(&adc_status.mutex_lock);
 			enable_irq(SPI_IRQ);
+			if (copy_to_user((void*) arg, &temp_Unit, sizeof(struct dataUnit_ADC)))
+						return (-EFAULT);
 			return (0);
 		} else if ((buf[adc_status.num_buf_read].compl_fill == false)
 				|| (buf[adc_status.num_buf_read].loc == COMPL_READ_BUFFER)) {
@@ -544,7 +546,7 @@ static void callback_dma(unsigned lch, u16 ch_status, void *data) {
 		//изменение индексов считываемого и записываемого буфера
 		adc_status.num_buf_read = adc_status.num_buf_write;
 		adc_status.num_buf_write = buf_temp;
-		//printk(KERN_INFO "Only that there was a ping-pong\n");
+		printk(KERN_INFO "Only that there was a ping-pong\n");
 		complete(&done_PingPong); //сигнализирование о произошедшей ротации буферов (ping-pong)
 		wake_up_interruptible(&qwait);
 		//сигнализирование о доступности данных для чтения
